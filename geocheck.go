@@ -1,82 +1,104 @@
 package main
 
 import (
+	"bufio"
+	"flag"
+	"fmt"
 	"github.com/oschwald/geoip2-golang"
 	"log"
 	"net"
-	"strings"
-	"fmt"
 	"os"
-	"bufio"
-	"flag"
+	"strconv"
+	"strings"
 )
 
-func process_shot (database string, ip_address string, cityon bool ) {
-	db, err := geoip2.Open(database)
+type report struct {
+	ASN     uint
+	IP      string
+	City    string
+	Country string
+	Org     string
+}
+
+func asn(ip net.IP, dbNet string) (uint, string) {
+	db, err := geoip2.Open(dbNet)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	ip := net.ParseIP(strings.TrimRight(ip_address,"\n"))
+	record, err := db.ASN(ip)
+	if err != nil {
+		log.Fatal(err)
+	}
+	asNet := record.AutonomousSystemNumber
+	asOrg := record.AutonomousSystemOrganization
+	return asNet, asOrg
+}
+
+func geo(ip net.IP, dbGEO string) (string, string) {
+	db, err := geoip2.Open(dbGEO)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 	record, err := db.City(ip)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if cityon == false {
-		fmt.Printf("%v,%v\n", ip, record.Country.Names["en"])
-	} else {
-		fmt.Printf("%v,%v,%v\n", ip, record.Country.Names["en"], record.City.Names["en"])
+	country := record.Country.Names["en"]
+	city := record.City.Names["en"]
+	return country, city
+}
+
+func output(report *report) {
+	result := []string{report.IP,
+		report.Country,
+		report.City,
+		strconv.FormatUint(uint64(report.ASN), 10),
+		report.Org,
 	}
+	fmt.Println(strings.Join(result, ","))
+}
+
+func process(dbNet string, dbGeo string, readLine string) {
+	var report report
+	report.IP = readLine
+	ip := net.ParseIP(readLine)
+	report.Country, report.City = geo(ip, dbGeo)
+	if dbNet != "" {
+		report.ASN, report.Org = asn(ip, dbNet)
+	}
+	output(&report)
 
 }
 
-func process (database string, filehost string, cityon bool ) {
-	file, _ := os.Open(filehost)
-	f := bufio.NewReader(file)
-	db, err := geoip2.Open(database)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-	for {
-		read_line, _ := f.ReadString('\n')
-		if read_line != "" {
-			ip := net.ParseIP(strings.TrimRight(read_line,"\n"))
-			record, err := db.City(ip)
-			if err != nil {
-				log.Fatal(err)
-			}
-			if cityon == false {
-				fmt.Printf("%v,%v\n", ip, record.Country.Names["en"])
+func handler(dbNet string, dbGeo string, filehost string, short string) {
+	if short == "" {
+		file, _ := os.Open(filehost)
+		f := bufio.NewReader(file)
+		for {
+			readLine, _ := f.ReadString('\n')
+			if readLine != "" {
+				readLine = strings.TrimRight(readLine, "\n")
+				process(dbNet, dbGeo, readLine)
 			} else {
-				fmt.Printf("%v,%v,%v\n", ip, record.Country.Names["en"], record.City.Names["en"])
+				break
 			}
-		} else {
-			break
-		}
 
+		}
+	} else if short != "" {
+		process(dbNet, dbGeo, short)
+	} else {
+		log.Fatal()
 	}
 
 }
 func main() {
-	dbname := "GeoLite2-City.mmdb"
-	filename :="ip_part"
-	databasePtr := flag.String("db", dbname,"Path to database" )
-	filePtr := flag.String("f", filename ,"Path to file" )
-	cityPtr := flag.Bool("c", false,"Include information about City" )
-	shootPtr := flag.String("a", "false","IP to resolve" )
-	helpPtr := flag.Bool("h", false,"help" )
+	filename := "ip_part"
+	dbGeoPtr := flag.String("dbGeo", "GeoLite2-City.mmdb", "Path to database GEO")
+	dbASNPtr := flag.String("dbNet", "GeoLite2-ASN.mmdb", "Path to database ASN")
+	filePtr := flag.String("f", filename, "Path to file")
+	shortPtr := flag.String("a", "", "IP check")
 	flag.Parse()
-
-	if (*helpPtr == false) && (*shootPtr != "false") {
-		process_shot(*databasePtr,*shootPtr,*cityPtr)
-	} else if *helpPtr == false {
-		process(*databasePtr,*filePtr,*cityPtr)
-	} else {
-		fmt.Printf("-db	Path to database\n" + "-f	Path to file\n" + "-c	Include information about City\n" + "-a	ipaddress IP to resolve\n" + "-h	help\n")
-		fmt.Printf("You can don't use flags, if import db to directory with program and use name GeoLite2-City.mmdb, use  list of ip addresses with name ip_part\n")
-	}
-
-
+	handler(*dbASNPtr, *dbGeoPtr, *filePtr, *shortPtr)
 }
-
